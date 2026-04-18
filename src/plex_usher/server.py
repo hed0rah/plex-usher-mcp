@@ -39,20 +39,6 @@ _client: PlexClient | None = None
 _client_lock = asyncio.Lock()
 
 
-# Shared annotation shapes. Every tool here is scoped to one Plex server, so
-# openWorldHint is always False. Tools differ on read/idempotent.
-_READ_IDEMPOTENT = ToolAnnotations(
-    readOnlyHint=True,
-    idempotentHint=True,
-    openWorldHint=False,
-)
-_READ_VOLATILE = ToolAnnotations(
-    readOnlyHint=True,
-    idempotentHint=False,  # output drifts with time (watch progress, new additions)
-    openWorldHint=False,
-)
-
-
 async def _get_client() -> PlexClient:
     global _client
     async with _client_lock:
