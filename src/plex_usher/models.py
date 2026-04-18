@@ -79,3 +79,11 @@ class SearchCandidate(BaseModel):
     year: int | None = None
     library: str | None = None
     score: float  # 0.0 - 100.0, higher is better
+
+
+class PosterSaveResult(BaseModel):
+    rating_key: str
+    title: str
+    year: int | None = None
+    path: str
+    bytes_written: int

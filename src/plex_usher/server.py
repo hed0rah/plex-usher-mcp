@@ -1,16 +1,19 @@
 """FastMCP server for Plex Media Server.
 
-All tools are strictly read-only. Images come back through MCP as Image content;
-the caller decides where to save them.
+All tools carry MCP annotations (readOnly/idempotent/destructive/openWorld hints).
+Read tools are strictly read-only. plex_save_poster is the only tool that writes
+to the server's filesystem.
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.utilities.types import Image
+from mcp.types import ToolAnnotations
 from rapidfuzz import fuzz
 
 from .client import PlexClient
@@ -20,6 +23,7 @@ from .models import (
     ItemSummary,
     Library,
     LibraryStats,
+    PosterSaveResult,
     SearchCandidate,
 )
 from .utils import (
@@ -55,7 +59,15 @@ def _total_size(raw: dict[str, Any]) -> int:
     return int(raw.get("MediaContainer", {}).get("totalSize", 0))
 
 
-@mcp.tool(name="plex_list_libraries")
+@mcp.tool(
+    name="plex_list_libraries",
+    annotations=ToolAnnotations(
+        title="List Plex Libraries",
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def plex_list_libraries() -> list[Library]:
     """List all library sections on the Plex server.
 
@@ -67,7 +79,15 @@ async def plex_list_libraries() -> list[Library]:
     return [parse_library(d) for d in _directories(raw)]
 
 
-@mcp.tool(name="plex_library_stats")
+@mcp.tool(
+    name="plex_library_stats",
+    annotations=ToolAnnotations(
+        title="Plex Library Stats",
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def plex_library_stats(section_key: str) -> LibraryStats:
     """Return total and unwatched item counts for a library section.
 
@@ -104,7 +124,15 @@ async def plex_library_stats(section_key: str) -> LibraryStats:
     return parse_library_stats(library, total, unwatched)
 
 
-@mcp.tool(name="plex_list_items")
+@mcp.tool(
+    name="plex_list_items",
+    annotations=ToolAnnotations(
+        title="List Items in Plex Library",
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def plex_list_items(
     section_key: str,
     limit: int = 50,
@@ -136,7 +164,7 @@ async def plex_list_items(
     if genre:
         params["genre"] = genre
     if year_min is not None:
-        params["year>>"] = year_min - 1  # Plex uses `>>` for "greater than"
+        params["year>>"] = year_min - 1
     if year_max is not None:
         params["year<<"] = year_max + 1
     if rating_min is not None:
@@ -147,7 +175,15 @@ async def plex_list_items(
     return [parse_item_summary(m) for m in _container(raw)]
 
 
-@mcp.tool(name="plex_get_item")
+@mcp.tool(
+    name="plex_get_item",
+    annotations=ToolAnnotations(
+        title="Get Plex Item Detail",
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def plex_get_item(rating_key: str) -> ItemDetail:
     """Fetch full metadata for one item.
 
@@ -164,7 +200,15 @@ async def plex_get_item(rating_key: str) -> ItemDetail:
     return parse_item_detail(items[0])
 
 
-@mcp.tool(name="plex_list_seasons")
+@mcp.tool(
+    name="plex_list_seasons",
+    annotations=ToolAnnotations(
+        title="List Seasons of a Show",
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def plex_list_seasons(show_rating_key: str) -> list[ItemSummary]:
     """List seasons for a show."""
     client = await _get_client()
@@ -172,7 +216,15 @@ async def plex_list_seasons(show_rating_key: str) -> list[ItemSummary]:
     return [parse_item_summary(m) for m in _container(raw)]
 
 
-@mcp.tool(name="plex_list_episodes")
+@mcp.tool(
+    name="plex_list_episodes",
+    annotations=ToolAnnotations(
+        title="List Episodes in a Season",
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def plex_list_episodes(season_rating_key: str) -> list[ItemSummary]:
     """List episodes in a season."""
     client = await _get_client()
@@ -180,9 +232,18 @@ async def plex_list_episodes(season_rating_key: str) -> list[ItemSummary]:
     return [parse_item_summary(m) for m in _container(raw)]
 
 
-@mcp.tool(name="plex_recently_added")
+@mcp.tool(
+    name="plex_recently_added",
+    annotations=ToolAnnotations(
+        title="Recently Added to Plex",
+        readOnlyHint=True,
+        idempotentHint=False,  # new items appear over time
+        openWorldHint=False,
+    ),
+)
 async def plex_recently_added(limit: int = 25) -> list[ItemSummary]:
-    """Items recently added across all libraries."""
+    """Items recently added across all libraries. Non-idempotent: output drifts as new
+    items are added to Plex."""
     client = await _get_client()
     raw = await client.get_json(
         "/library/recentlyAdded",
@@ -191,15 +252,32 @@ async def plex_recently_added(limit: int = 25) -> list[ItemSummary]:
     return [parse_item_summary(m) for m in _container(raw)]
 
 
-@mcp.tool(name="plex_on_deck")
+@mcp.tool(
+    name="plex_on_deck",
+    annotations=ToolAnnotations(
+        title="Plex On-Deck (Continue Watching)",
+        readOnlyHint=True,
+        idempotentHint=False,  # changes as user watches
+        openWorldHint=False,
+    ),
+)
 async def plex_on_deck() -> list[ItemSummary]:
-    """Continue-watching items (Plex's 'On Deck' list)."""
+    """Continue-watching items (Plex's 'On Deck' list). Non-idempotent: output
+    changes as the user watches things."""
     client = await _get_client()
     raw = await client.get_json("/library/onDeck")
     return [parse_item_summary(m) for m in _container(raw)]
 
 
-@mcp.tool(name="plex_search")
+@mcp.tool(
+    name="plex_search",
+    annotations=ToolAnnotations(
+        title="Fuzzy Search Plex",
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def plex_search(
     query: str,
     limit: int = 10,
@@ -210,8 +288,7 @@ async def plex_search(
     For ambiguous queries ('Aliens 2', partial titles, misspellings). The calling
     model should inspect the candidates, pick the intended one by rating_key, then
     call plex_get_item or plex_get_poster. Each candidate includes the library
-    section name so multi-library hits can be disambiguated (e.g. a movie called
-    'Ghost' vs a show called 'Ghost').
+    section name so multi-library hits can be disambiguated.
 
     Scores are 0-100 (rapidfuzz WRatio); treat <60 as unreliable.
     """
@@ -241,14 +318,58 @@ async def plex_search(
     return results[:limit]
 
 
-@mcp.tool(name="plex_get_poster")
+@mcp.tool(
+    name="plex_get_poster",
+    annotations=ToolAnnotations(
+        title="Get Plex Poster (read-only)",
+        readOnlyHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
 async def plex_get_poster(rating_key: str) -> Image:
-    """Fetch the poster (thumb) for an item, returned as MCP Image content.
+    """Fetch the poster (thumb) for an item as MCP Image content.
 
-    The caller receives the image bytes in the tool response and decides what to
-    do with them (save to a vault, display inline, attach to a message, etc.).
-    This tool writes nothing to disk and has no knowledge of where the image will
-    end up. Raises if the item has no poster.
+    Pure read: nothing is written to disk. The caller receives the image bytes
+    and decides what to do with them (display inline, pass to another tool, etc.).
+    For clients that can't persist binary MCP content, use plex_save_poster instead.
+    Raises if the item has no poster.
+    """
+    client = await _get_client()
+    raw = await client.get_json(f"/library/metadata/{rating_key}")
+    items = _container(raw)
+    if not items:
+        raise ValueError(f"no item with rating_key={rating_key}")
+    thumb = items[0].get("thumb")
+    if not thumb:
+        title = items[0].get("title", rating_key)
+        raise ValueError(f"item {title!r} has no poster thumb")
+    data = await client.stream_image(thumb)
+    return Image(data=data, format="jpeg")
+
+
+@mcp.tool(
+    name="plex_save_poster",
+    annotations=ToolAnnotations(
+        title="Save Plex Poster to Disk",
+        readOnlyHint=False,
+        destructiveHint=True,  # overwrites save_to if the file exists
+        idempotentHint=True,  # same args = same bytes at same path
+        openWorldHint=False,
+    ),
+)
+async def plex_save_poster(rating_key: str, save_to: str) -> PosterSaveResult:
+    """Fetch a poster from Plex and write it to the MCP server's filesystem.
+
+    save_to: absolute path where the JPEG should be written on the server host.
+    Parent directories are created. If the file already exists it is overwritten
+    (hence destructiveHint=True). Returns path, byte count, and item metadata —
+    no inline image content, to keep this path cheap for callers that just need
+    to confirm the write.
+
+    Only useful when the caller and MCP server share a filesystem (e.g. local
+    stdio transport). For clients that can persist binary MCP content directly,
+    prefer plex_get_poster and handle the write client-side.
     """
     client = await _get_client()
     raw = await client.get_json(f"/library/metadata/{rating_key}")
@@ -256,13 +377,23 @@ async def plex_get_poster(rating_key: str) -> Image:
     if not items:
         raise ValueError(f"no item with rating_key={rating_key}")
 
-    thumb = items[0].get("thumb")
+    meta = items[0]
+    thumb = meta.get("thumb")
     if not thumb:
-        title = items[0].get("title", rating_key)
-        raise ValueError(f"item {title!r} has no poster thumb")
+        raise ValueError(f"item {meta.get('title', rating_key)!r} has no poster thumb")
 
     data = await client.stream_image(thumb)
-    return Image(data=data, format="jpeg")
+    target = Path(save_to).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+
+    return PosterSaveResult(
+        rating_key=str(meta["ratingKey"]),
+        title=meta.get("title", ""),
+        year=meta.get("year"),
+        path=str(target),
+        bytes_written=len(data),
+    )
 
 
 def main() -> None:
