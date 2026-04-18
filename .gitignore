@@ -1,0 +1,22 @@
+.env
+.env.local
+*.pyc
+__pycache__/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# local claude code settings (per-machine)
+.claude/
+
+# smoke test output
+*.jpg
+*.png
+
+# local reference material to be deleted
+to_analyze_and_delete/

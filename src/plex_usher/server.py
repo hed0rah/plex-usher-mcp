@@ -1,0 +1,273 @@
+"""FastMCP server for Plex Media Server.
+
+All tools are strictly read-only. Images come back through MCP as Image content;
+the caller decides where to save them.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+from fastmcp import FastMCP
+from fastmcp.utilities.types import Image
+from rapidfuzz import fuzz
+
+from .client import PlexClient
+from .config import Config
+from .models import (
+    ItemDetail,
+    ItemSummary,
+    Library,
+    LibraryStats,
+    SearchCandidate,
+)
+from .utils import (
+    parse_item_detail,
+    parse_item_summary,
+    parse_library,
+    parse_library_stats,
+)
+
+mcp: FastMCP = FastMCP("plex-usher")
+
+_client: PlexClient | None = None
+_client_lock = asyncio.Lock()
+
+
+async def _get_client() -> PlexClient:
+    global _client
+    async with _client_lock:
+        if _client is None:
+            _client = PlexClient(Config.from_env())
+    return _client
+
+
+def _container(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    return raw.get("MediaContainer", {}).get("Metadata", []) or []
+
+
+def _directories(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    return raw.get("MediaContainer", {}).get("Directory", []) or []
+
+
+def _total_size(raw: dict[str, Any]) -> int:
+    return int(raw.get("MediaContainer", {}).get("totalSize", 0))
+
+
+@mcp.tool(name="plex_list_libraries")
+async def plex_list_libraries() -> list[Library]:
+    """List all library sections on the Plex server.
+
+    Returns each section's key (use as section_key in other tools), title, and type
+    (movie | show | artist | photo). No item counts — call plex_library_stats for that.
+    """
+    client = await _get_client()
+    raw = await client.get_json("/library/sections/all")
+    return [parse_library(d) for d in _directories(raw)]
+
+
+@mcp.tool(name="plex_library_stats")
+async def plex_library_stats(section_key: str) -> LibraryStats:
+    """Return total and unwatched item counts for a library section.
+
+    Cheap: uses Container-Size=0 so Plex returns the totalSize without payload.
+    unwatched_count is None for libraries where watched state doesn't apply (music, photos).
+    """
+    client = await _get_client()
+    libs_raw = await client.get_json("/library/sections/all")
+    library = next(
+        (parse_library(d) for d in _directories(libs_raw) if str(d["key"]) == section_key),
+        None,
+    )
+    if library is None:
+        raise ValueError(f"no library with key={section_key}")
+
+    total_raw = await client.get_json(
+        f"/library/sections/{section_key}/all",
+        params={"X-Plex-Container-Start": 0, "X-Plex-Container-Size": 0},
+    )
+    total = _total_size(total_raw) or len(_container(total_raw))
+
+    unwatched: int | None = None
+    if library.type in {"movie", "show"}:
+        unwatched_raw = await client.get_json(
+            f"/library/sections/{section_key}/all",
+            params={
+                "unwatched": 1,
+                "X-Plex-Container-Start": 0,
+                "X-Plex-Container-Size": 0,
+            },
+        )
+        unwatched = _total_size(unwatched_raw) or len(_container(unwatched_raw))
+
+    return parse_library_stats(library, total, unwatched)
+
+
+@mcp.tool(name="plex_list_items")
+async def plex_list_items(
+    section_key: str,
+    limit: int = 50,
+    offset: int = 0,
+    sort: str = "titleSort:asc",
+    unwatched: bool = False,
+    genre: str | None = None,
+    year_min: int | None = None,
+    year_max: int | None = None,
+    rating_min: float | None = None,
+) -> list[ItemSummary]:
+    """List items in a library section with optional filters.
+
+    Filters are applied server-side by Plex:
+    - unwatched=True: only items with view_count == 0
+    - genre: exact match on genre tag (e.g. "Horror", "Anime"). Case-sensitive on Plex.
+    - year_min / year_max: inclusive bounds on release year
+    - rating_min: minimum user rating (1-10 scale)
+
+    sort examples: titleSort:asc, addedAt:desc, year:desc, rating:desc, lastViewedAt:desc
+    """
+    params: dict[str, Any] = {
+        "X-Plex-Container-Start": offset,
+        "X-Plex-Container-Size": limit,
+        "sort": sort,
+    }
+    if unwatched:
+        params["unwatched"] = 1
+    if genre:
+        params["genre"] = genre
+    if year_min is not None:
+        params["year>>"] = year_min - 1  # Plex uses `>>` for "greater than"
+    if year_max is not None:
+        params["year<<"] = year_max + 1
+    if rating_min is not None:
+        params["rating>>"] = rating_min - 0.0001
+
+    client = await _get_client()
+    raw = await client.get_json(f"/library/sections/{section_key}/all", params=params)
+    return [parse_item_summary(m) for m in _container(raw)]
+
+
+@mcp.tool(name="plex_get_item")
+async def plex_get_item(rating_key: str) -> ItemDetail:
+    """Fetch full metadata for one item.
+
+    Returns structured fields (genres, directors, writers, actors as arrays) AND
+    pre-formatted strings (genres_formatted, actors_formatted, duration_formatted)
+    ready to paste into a note. Also includes watched state, view count, added date,
+    last-viewed date, and file paths on disk.
+    """
+    client = await _get_client()
+    raw = await client.get_json(f"/library/metadata/{rating_key}")
+    items = _container(raw)
+    if not items:
+        raise ValueError(f"no item with rating_key={rating_key}")
+    return parse_item_detail(items[0])
+
+
+@mcp.tool(name="plex_list_seasons")
+async def plex_list_seasons(show_rating_key: str) -> list[ItemSummary]:
+    """List seasons for a show."""
+    client = await _get_client()
+    raw = await client.get_json(f"/library/metadata/{show_rating_key}/children")
+    return [parse_item_summary(m) for m in _container(raw)]
+
+
+@mcp.tool(name="plex_list_episodes")
+async def plex_list_episodes(season_rating_key: str) -> list[ItemSummary]:
+    """List episodes in a season."""
+    client = await _get_client()
+    raw = await client.get_json(f"/library/metadata/{season_rating_key}/children")
+    return [parse_item_summary(m) for m in _container(raw)]
+
+
+@mcp.tool(name="plex_recently_added")
+async def plex_recently_added(limit: int = 25) -> list[ItemSummary]:
+    """Items recently added across all libraries."""
+    client = await _get_client()
+    raw = await client.get_json(
+        "/library/recentlyAdded",
+        params={"X-Plex-Container-Start": 0, "X-Plex-Container-Size": limit},
+    )
+    return [parse_item_summary(m) for m in _container(raw)]
+
+
+@mcp.tool(name="plex_on_deck")
+async def plex_on_deck() -> list[ItemSummary]:
+    """Continue-watching items (Plex's 'On Deck' list)."""
+    client = await _get_client()
+    raw = await client.get_json("/library/onDeck")
+    return [parse_item_summary(m) for m in _container(raw)]
+
+
+@mcp.tool(name="plex_search")
+async def plex_search(
+    query: str,
+    limit: int = 10,
+    section_key: str | None = None,
+) -> list[SearchCandidate]:
+    """Fuzzy-search Plex and return top-N candidates ranked by match score.
+
+    For ambiguous queries ('Aliens 2', partial titles, misspellings). The calling
+    model should inspect the candidates, pick the intended one by rating_key, then
+    call plex_get_item or plex_get_poster. Each candidate includes the library
+    section name so multi-library hits can be disambiguated (e.g. a movie called
+    'Ghost' vs a show called 'Ghost').
+
+    Scores are 0-100 (rapidfuzz WRatio); treat <60 as unreliable.
+    """
+    client = await _get_client()
+    params: dict[str, Any] = {"query": query}
+    if section_key:
+        params["sectionId"] = section_key
+
+    raw = await client.get_json("/search", params=params)
+    results: list[SearchCandidate] = []
+    for m in _container(raw):
+        title = m.get("title", "")
+        year = m.get("year")
+        haystack = f"{title} {year}" if year else title
+        score = fuzz.WRatio(query, haystack)
+        results.append(
+            SearchCandidate(
+                rating_key=str(m["ratingKey"]),
+                title=title,
+                type=m.get("type", "unknown"),
+                year=year,
+                library=m.get("librarySectionTitle"),
+                score=float(score),
+            )
+        )
+    results.sort(key=lambda c: c.score, reverse=True)
+    return results[:limit]
+
+
+@mcp.tool(name="plex_get_poster")
+async def plex_get_poster(rating_key: str) -> Image:
+    """Fetch the poster (thumb) for an item, returned as MCP Image content.
+
+    The caller receives the image bytes in the tool response and decides what to
+    do with them (save to a vault, display inline, attach to a message, etc.).
+    This tool writes nothing to disk and has no knowledge of where the image will
+    end up. Raises if the item has no poster.
+    """
+    client = await _get_client()
+    raw = await client.get_json(f"/library/metadata/{rating_key}")
+    items = _container(raw)
+    if not items:
+        raise ValueError(f"no item with rating_key={rating_key}")
+
+    thumb = items[0].get("thumb")
+    if not thumb:
+        title = items[0].get("title", rating_key)
+        raise ValueError(f"item {title!r} has no poster thumb")
+
+    data = await client.stream_image(thumb)
+    return Image(data=data, format="jpeg")
+
+
+def main() -> None:
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()
