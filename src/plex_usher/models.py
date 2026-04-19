@@ -34,6 +34,7 @@ class ItemSummary(BaseModel):
     last_viewed_at: int | None = None  # unix seconds
     added_at: int | None = None  # unix seconds
     library: str | None = None
+    thumb: str | None = None  # Plex-internal poster path; pass to plex_get_poster
 
 
 class Person(BaseModel):

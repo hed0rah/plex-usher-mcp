@@ -7,15 +7,17 @@ skip TLS verification. The token is never returned in tool responses.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
 
 from .config import Config
 
-# Endpoints that return 400 when the parent has no children instead of
-# returning an empty MediaContainer. Treat 400 on these as "empty".
-_EMPTY_OK_SUFFIX = "/children"
+# /library/metadata/{id}/children returns 400 when the parent has no children
+# instead of an empty MediaContainer. Match the full path so we don't swallow
+# unrelated 400s on some future endpoint that happens to end in /children.
+_EMPTY_OK_PATH = re.compile(r"^/library/metadata/\d+/children$")
 
 
 class PlexError(RuntimeError):
@@ -43,7 +45,7 @@ class PlexClient:
         except httpx.HTTPError as exc:
             raise PlexError(f"plex request failed: {exc}") from exc
 
-        if response.status_code == 400 and path.endswith(_EMPTY_OK_SUFFIX):
+        if response.status_code == 400 and _EMPTY_OK_PATH.match(path):
             return {"MediaContainer": {"Metadata": []}}
 
         if response.status_code >= 400:

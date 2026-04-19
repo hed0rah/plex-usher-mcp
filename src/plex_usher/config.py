@@ -20,7 +20,11 @@ def _config_file() -> Path:
 
 
 def _load_config_file() -> None:
-    """Load vars from user config dir if they're not already set in the environment."""
+    """Load vars from a project-local .env (dev convenience), then the user
+    config dir. Neither overrides values already set in the environment."""
+    # Project-local .env: load_dotenv() with no args walks up from CWD.
+    load_dotenv(override=False)
+
     path = _config_file()
     if path.is_file():
         load_dotenv(path, override=False)

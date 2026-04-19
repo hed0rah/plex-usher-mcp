@@ -8,6 +8,8 @@ to the server's filesystem.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +35,6 @@ from .utils import (
     parse_library_stats,
 )
 
-mcp: FastMCP = FastMCP("plex-usher")
-
 _client: PlexClient | None = None
 _client_lock = asyncio.Lock()
 
@@ -45,6 +45,20 @@ async def _get_client() -> PlexClient:
         if _client is None:
             _client = PlexClient(Config.from_env())
     return _client
+
+
+@asynccontextmanager
+async def _lifespan(_server: FastMCP) -> AsyncIterator[None]:
+    try:
+        yield
+    finally:
+        global _client
+        if _client is not None:
+            await _client.aclose()
+            _client = None
+
+
+mcp: FastMCP = FastMCP("plex-usher", lifespan=_lifespan)
 
 
 def _container(raw: dict[str, Any]) -> list[dict[str, Any]]:
@@ -61,6 +75,7 @@ def _total_size(raw: dict[str, Any]) -> int:
 
 @mcp.tool(
     name="plex_list_libraries",
+    tags={"libraries", "discovery"},
     annotations=ToolAnnotations(
         title="List Plex Libraries",
         readOnlyHint=True,
@@ -81,6 +96,7 @@ async def plex_list_libraries() -> list[Library]:
 
 @mcp.tool(
     name="plex_library_stats",
+    tags={"libraries", "metadata"},
     annotations=ToolAnnotations(
         title="Plex Library Stats",
         readOnlyHint=True,
@@ -126,6 +142,7 @@ async def plex_library_stats(section_key: str) -> LibraryStats:
 
 @mcp.tool(
     name="plex_list_items",
+    tags={"items", "browse"},
     annotations=ToolAnnotations(
         title="List Items in Plex Library",
         readOnlyHint=True,
@@ -163,6 +180,9 @@ async def plex_list_items(
         params["unwatched"] = 1
     if genre:
         params["genre"] = genre
+    # Plex's >> and << operators are strictly greater/less than (exclusive).
+    # Subtract/add to make the documented year_min/year_max/rating_min bounds
+    # behave inclusively. Do NOT "simplify" these without changing the operator.
     if year_min is not None:
         params["year>>"] = year_min - 1
     if year_max is not None:
@@ -177,6 +197,7 @@ async def plex_list_items(
 
 @mcp.tool(
     name="plex_get_item",
+    tags={"items", "metadata"},
     annotations=ToolAnnotations(
         title="Get Plex Item Detail",
         readOnlyHint=True,
@@ -202,6 +223,7 @@ async def plex_get_item(rating_key: str) -> ItemDetail:
 
 @mcp.tool(
     name="plex_list_seasons",
+    tags={"shows", "browse"},
     annotations=ToolAnnotations(
         title="List Seasons of a Show",
         readOnlyHint=True,
@@ -218,6 +240,7 @@ async def plex_list_seasons(show_rating_key: str) -> list[ItemSummary]:
 
 @mcp.tool(
     name="plex_list_episodes",
+    tags={"shows", "browse"},
     annotations=ToolAnnotations(
         title="List Episodes in a Season",
         readOnlyHint=True,
@@ -234,6 +257,7 @@ async def plex_list_episodes(season_rating_key: str) -> list[ItemSummary]:
 
 @mcp.tool(
     name="plex_recently_added",
+    tags={"items", "discovery"},
     annotations=ToolAnnotations(
         title="Recently Added to Plex",
         readOnlyHint=True,
@@ -254,6 +278,7 @@ async def plex_recently_added(limit: int = 25) -> list[ItemSummary]:
 
 @mcp.tool(
     name="plex_on_deck",
+    tags={"items", "discovery"},
     annotations=ToolAnnotations(
         title="Plex On-Deck (Continue Watching)",
         readOnlyHint=True,
@@ -271,6 +296,7 @@ async def plex_on_deck() -> list[ItemSummary]:
 
 @mcp.tool(
     name="plex_search",
+    tags={"search", "discovery"},
     annotations=ToolAnnotations(
         title="Fuzzy Search Plex",
         readOnlyHint=True,
@@ -325,6 +351,7 @@ async def plex_search(
 
 @mcp.tool(
     name="plex_get_poster",
+    tags={"media", "image"},
     annotations=ToolAnnotations(
         title="Get Plex Poster (read-only)",
         readOnlyHint=True,
@@ -357,6 +384,7 @@ async def plex_get_poster(rating_key: str) -> Image:
 
 @mcp.tool(
     name="plex_save_poster",
+    tags={"media", "image", "write"},
     annotations=ToolAnnotations(
         title="Save Plex Poster to Disk",
         readOnlyHint=False,
