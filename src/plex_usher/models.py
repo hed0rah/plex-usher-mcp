@@ -64,6 +64,7 @@ class ItemDetail(BaseModel):
     view_count: int = 0
     watched: bool = False
     file_paths: list[str] = Field(default_factory=list)
+    thumb: str | None = None  # Plex-internal poster path; pass to plex_get_poster
 
     # Pre-formatted strings ready to drop into a note.
     genres_formatted: str = ""          # "Horror, Sci-Fi"

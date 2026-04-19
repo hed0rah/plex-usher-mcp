@@ -118,6 +118,7 @@ def parse_item_detail(raw: dict[str, Any]) -> ItemDetail:
         view_count=view_count,
         watched=view_count > 0,
         file_paths=_file_paths(raw.get("Media")),
+        thumb=raw.get("thumb"),
         genres_formatted=", ".join(genres),
         directors_formatted=", ".join(directors),
         writers_formatted=", ".join(writers),
