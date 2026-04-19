@@ -84,6 +84,7 @@ def parse_item_summary(raw: dict[str, Any]) -> ItemSummary:
         last_viewed_at=raw.get("lastViewedAt"),
         added_at=raw.get("addedAt"),
         library=raw.get("librarySectionTitle"),
+        thumb=raw.get("thumb"),
     )
 
 
