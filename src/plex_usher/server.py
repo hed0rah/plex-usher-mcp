@@ -344,8 +344,10 @@ async def plex_get_poster(rating_key: str) -> Image:
     if not thumb:
         title = items[0].get("title", rating_key)
         raise ValueError(f"item {title!r} has no poster thumb")
-    data = await client.stream_image(thumb)
-    return Image(data=data, format="jpeg")
+    data, content_type = await client.stream_image(thumb)
+    # content_type like "image/png" -> MCP Image format wants the subtype only
+    subtype = content_type.split("/", 1)[1] if "/" in content_type else "jpeg"
+    return Image(data=data, format=subtype)
 
 
 @mcp.tool(
@@ -382,7 +384,7 @@ async def plex_save_poster(rating_key: str, save_to: str) -> PosterSaveResult:
     if not thumb:
         raise ValueError(f"item {meta.get('title', rating_key)!r} has no poster thumb")
 
-    data = await client.stream_image(thumb)
+    data, _ = await client.stream_image(thumb)
     target = Path(save_to).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(data)

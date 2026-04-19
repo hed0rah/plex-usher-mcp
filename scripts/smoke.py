@@ -114,11 +114,13 @@ async def run(query: str | None, poster: str | None, out: Path | None, show_stat
             if not thumb:
                 print(f"[poster] no thumb for {detail.title}")
                 return 1
-            dest = out or Path(f"./poster-{detail.rating_key}.jpg")
-            data = await client.stream_image(thumb)
+            data, content_type = await client.stream_image(thumb)
+            # extension from content_type ("image/png" -> "png"); default to jpg
+            ext = content_type.split("/", 1)[1] if "/" in content_type else "jpg"
+            dest = out or Path(f"./poster-{detail.rating_key}.{ext}")
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
-            print(f"[poster] wrote {len(data):,} bytes -> {dest}")
+            print(f"[poster] wrote {len(data):,} bytes ({content_type}) -> {dest}")
 
         return 0
     finally:

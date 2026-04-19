@@ -56,12 +56,18 @@ class PlexClient:
         except ValueError as exc:
             raise PlexError(f"plex returned non-JSON for {path}") from exc
 
-    async def stream_image(self, image_path: str) -> bytes:
-        """Fetch a binary image (thumb/art). `image_path` is the path from the metadata."""
+    async def stream_image(self, image_path: str) -> tuple[bytes, str]:
+        """Fetch a binary image (thumb/art). `image_path` is the path from the metadata.
+
+        Returns (bytes, content_type). Plex serves posters as image/jpeg, image/png,
+        or image/webp depending on the source; the caller decides what to do with
+        the type. Defaults to image/jpeg if the server omits the header.
+        """
         try:
             response = await self._http.get(image_path)
         except httpx.HTTPError as exc:
             raise PlexError(f"plex image fetch failed: {exc}") from exc
         if response.status_code >= 400:
             raise PlexError(f"plex image fetch returned {response.status_code} for {image_path}")
-        return response.content
+        content_type = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+        return response.content, content_type
