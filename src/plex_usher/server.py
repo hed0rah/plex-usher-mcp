@@ -300,13 +300,18 @@ async def plex_search(
     raw = await client.get_json("/search", params=params)
     results: list[SearchCandidate] = []
     for m in _container(raw):
+        # Some result types (clips, extras, trailers) come back without a
+        # ratingKey. They aren't addressable by the other tools, so skip them.
+        rating_key = m.get("ratingKey")
+        if rating_key is None:
+            continue
         title = m.get("title", "")
         year = m.get("year")
         haystack = f"{title} {year}" if year else title
         score = fuzz.WRatio(query, haystack)
         results.append(
             SearchCandidate(
-                rating_key=str(m["ratingKey"]),
+                rating_key=str(rating_key),
                 title=title,
                 type=m.get("type", "unknown"),
                 year=year,
