@@ -34,6 +34,7 @@ class ItemSummary(BaseModel):
     last_viewed_at: int | None = None  # unix seconds
     added_at: int | None = None  # unix seconds
     library: str | None = None
+    thumb: str | None = None  # Plex-internal poster path; pass to plex_get_poster
 
 
 class Person(BaseModel):
@@ -63,6 +64,7 @@ class ItemDetail(BaseModel):
     view_count: int = 0
     watched: bool = False
     file_paths: list[str] = Field(default_factory=list)
+    thumb: str | None = None  # Plex-internal poster path; pass to plex_get_poster
 
     # Pre-formatted strings ready to drop into a note.
     genres_formatted: str = ""          # "Horror, Sci-Fi"

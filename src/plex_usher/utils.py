@@ -84,6 +84,7 @@ def parse_item_summary(raw: dict[str, Any]) -> ItemSummary:
         last_viewed_at=raw.get("lastViewedAt"),
         added_at=raw.get("addedAt"),
         library=raw.get("librarySectionTitle"),
+        thumb=raw.get("thumb"),
     )
 
 
@@ -117,6 +118,7 @@ def parse_item_detail(raw: dict[str, Any]) -> ItemDetail:
         view_count=view_count,
         watched=view_count > 0,
         file_paths=_file_paths(raw.get("Media")),
+        thumb=raw.get("thumb"),
         genres_formatted=", ".join(genres),
         directors_formatted=", ".join(directors),
         writers_formatted=", ".join(writers),
